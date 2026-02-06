@@ -2,6 +2,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
+#include <thread>
 #include <iostream>
 
 TcpServer::TcpServer(int port) : m_listen_fd(-1),
@@ -19,8 +20,9 @@ TcpServer::TcpServer(int port) : m_listen_fd(-1),
     sockaddr_in addr = {};
     addr.sin_family = AF_INET;         // 指定协议为 ipv4
     addr.sin_addr.s_addr = INADDR_ANY; // 绑定所有绑定本机所有网卡
-    addr.sin_port = htons(m_port);     // 主机字节序 转成 网络字节序
+    addr.sin_port = htons(m_port);     // 主机字节序 转成 网络字节序(统一转成网络通信用的大端字节序)
 
+    // 将sockaddr_in类型的向上转化为sockaddr类
     if (bind(m_listen_fd, (sockaddr *)&addr, sizeof(addr)) < 0)
     {
         perror("bind");
@@ -63,19 +65,28 @@ void TcpServer::start()
         inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
         std::cout << "Client connected: " << ip << std::endl;
 
-        // 5 接收客户端信息并回显
-        char buffer[1024];
-        while (true)
-        {
-            ssize_t n = recv(client_fd, buffer, sizeof(buffer), 0);
-            if (n <= 0)
-            {
-                std::cout << "Client disconnected: " << ip << std::endl;
-                break;
-            }
-            send(client_fd, buffer, n, 0);
-            std::cout << "Send to:" << client_fd << " Content: " << buffer << std::endl;
-        }
-        close(client_fd);
+        // 5 为每一个客户端创建线程
+        std::thread t(&TcpServer::handle_client, this, client_fd, ip);
+
+        // 6 分离线程
+        t.detach();
     }
+}
+
+void TcpServer::handle_client(int client_fd, char *ip)
+{
+    // 1 接收客户端信息并回显
+    char buffer[1024];
+    while (true)
+    {
+        ssize_t n = recv(client_fd, buffer, sizeof(buffer), 0);
+        if (n <= 0)
+        {
+            std::cout << "Client disconnected: " << ip << std::endl;
+            break;
+        }
+        send(client_fd, buffer, n, 0);
+        std::cout << "Send to:" << client_fd << " Content: " << buffer << std::endl;
+    }
+    close(client_fd);
 }
