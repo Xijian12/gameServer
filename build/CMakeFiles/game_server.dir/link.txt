@@ -1,1 +1,0 @@
-/usr/bin/c++ -g -O0 -Wall CMakeFiles/game_server.dir/src/main.cpp.o CMakeFiles/game_server.dir/src/net/tcp_server.cpp.o CMakeFiles/game_server.dir/src/server.cpp.o -o game_server 
