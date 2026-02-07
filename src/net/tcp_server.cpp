@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <cstring>
 #include <thread>
+#include <sys/epoll.h>
+#include <fcntl.h>
 #include <iostream>
 
 TcpServer::TcpServer(int port) : m_listen_fd(-1),
@@ -30,11 +32,20 @@ TcpServer::TcpServer(int port) : m_listen_fd(-1),
     }
 
     // 3 启动监听
-    if (listen(m_listen_fd, 5) < 0)
+    if (listen(m_listen_fd, 1024) < 0)
     {
         perror("listen");
         exit(1);
     }
+
+    // 将监听socket加入epoll
+    m_epfd = epoll_create1(EPOLL_CLOEXEC);
+    epoll_event ev{};
+    ev.events = EPOLLIN;
+    ev.data.fd = m_listen_fd;
+
+    set_nonblocking(m_listen_fd);
+    epoll_ctl(m_epfd, EPOLL_CTL_ADD, m_listen_fd, &ev);
 
     std::cout << "Start Listen on port :" << m_port << std::endl;
 }
@@ -48,46 +59,77 @@ TcpServer::~TcpServer()
 
 void TcpServer::start()
 {
+    epoll_event events[1024];
     while (true)
     {
-        sockaddr_in client_addr = {};
-        socklen_t client_len = sizeof(client_addr);
+        int n = epoll_wait(m_epfd, events, 1024, -1);
 
-        // 4 等待客户端连接
-        int client_fd = accept(m_listen_fd, (sockaddr *)&client_addr, &client_len);
-        if (client_fd < 0)
+        for (int i = 0; i < n; i++)
         {
-            perror("accept");
-            exit(1);
+            int fd = events[i].data.fd;
+
+            // 1 如果是监听请求的话，说明有新客户端尝试连接
+            // 有新客户端尝试连接时，操作系统会让m_listen_fd变为“可读”状态，也就是m_listen_fd出现在epoll队列中，
+            if (fd == m_listen_fd)
+            {
+                int client_fd = accept(m_listen_fd, nullptr, nullptr);
+                if (client_fd < 0)
+                {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    {
+                        // 没有更多连接了（正常情况）
+                        continue;
+                    }
+                    else
+                    {
+                        perror("accept");
+                        continue;
+                    }
+                }
+                set_nonblocking(client_fd);
+
+                epoll_event ev{};
+                ev.events = EPOLLIN;
+                ev.data.fd = client_fd;
+                epoll_ctl(m_epfd, EPOLL_CTL_ADD, client_fd, &ev);
+            }
+            else
+            {
+                // 2 接收客户端数据
+                char buf[1024];
+
+                ssize_t len = recv(fd, buf, sizeof(buf), 0);
+                if (len < 0)
+                {
+                    if (len == EAGAIN || len == EWOULDBLOCK)
+                    {
+                        // 没有更多连接了（正常情况）
+                        continue;
+                    }
+                    else
+                    {
+                        perror("receive");
+                        continue;
+                    }
+                }
+                else if (len == 0)
+                {
+                    std::cout << "Client closed connection " << std::endl;
+                    close(fd);
+                    epoll_ctl(m_epfd, EPOLL_CTL_DEL, fd, nullptr);
+                }
+                else
+                {
+                    send(fd, buf, sizeof(buf), 0);
+                    std::cout << "Send to:" << fd << " Content: " << buf << std::endl;
+                }
+            }
         }
-
-        char ip[INET_ADDRSTRLEN]; // 把二进制ip转为网络地址模式
-        inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
-        std::cout << "Client connected: " << ip << std::endl;
-
-        std::string ip_str = ip;
-        // 5 为每一个客户端创建线程
-        std::thread t(&TcpServer::handle_client, this, client_fd, ip);
-
-        // 6 分离线程
-        t.detach();
     }
 }
 
-void TcpServer::handle_client(int client_fd, const std::string &ip)
+void TcpServer::set_nonblocking(int fd)
 {
-    // 1 接收客户端信息并回显
-    char buffer[1024];
-    while (true)
-    {
-        ssize_t n = recv(client_fd, buffer, sizeof(buffer), 0);
-        if (n <= 0)
-        {
-            std::cout << "Client disconnected: " << ip << std::endl;
-            break;
-        }
-        send(client_fd, buffer, n, 0);
-        std::cout << "Send to:" << client_fd << " Content: " << buffer << std::endl;
-    }
-    close(client_fd);
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
