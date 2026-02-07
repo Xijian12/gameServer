@@ -65,6 +65,7 @@ void TcpServer::start()
         inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
         std::cout << "Client connected: " << ip << std::endl;
 
+        std::string ip_str = ip;
         // 5 为每一个客户端创建线程
         std::thread t(&TcpServer::handle_client, this, client_fd, ip);
 
@@ -73,7 +74,7 @@ void TcpServer::start()
     }
 }
 
-void TcpServer::handle_client(int client_fd, char *ip)
+void TcpServer::handle_client(int client_fd, const std::string &ip)
 {
     // 1 接收客户端信息并回显
     char buffer[1024];
